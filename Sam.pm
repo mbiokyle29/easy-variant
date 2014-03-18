@@ -1,4 +1,5 @@
 package Sam;
+use lib "/home/kyle/Dev/easy-variant/";
 use Moose;
 use Cigar;
 use Sequence;

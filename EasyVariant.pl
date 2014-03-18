@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-use lib "/home/kyle/lab/perlpipe/perl/moose/";
+use lib "/home/kyle/Dev/easy-variant/";
 use Genome;
 use Sam;
 use Getopt::Long;
