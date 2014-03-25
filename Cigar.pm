@@ -103,7 +103,7 @@ sub _build_end
 	my $self = shift;
 	if($self->length)
 	{
-		return ($self->start_pos+$self->length);
+		return ($self->start_pos+$self->length)-1;
 	}
 	return -1;
 }

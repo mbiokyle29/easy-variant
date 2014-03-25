@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-use lib "/home/kyle/Dev/easy-variant/";
+use lib "/home/kyle/lab/easy-variant/";
 use Genome;
 use Sam;
 use Getopt::Long;
@@ -44,6 +44,9 @@ if($end_pos < $start_pos)
 	die "Please add valid values for --end and/or --start";
 }
 
+open my $output, ">", "/home/kyle/lab/results";
+open my $inter, ">", "/home/kyle/lab/intermediate";
+
 my @sam_lines = read_file($sam_file);
 foreach my $sam_line (@sam_lines)
 {
@@ -57,11 +60,28 @@ foreach my $sam_line (@sam_lines)
 	my $reference_pointer = $sam->cigar->start_pos;
 	my $read_pointer = 1;
 	my @cigar_stack = split(//,$sam->cigar->stack);
-	
+
+
 	# Flags
 	my $first = 1;
 	my $soft_clipping = 0;
 	my $inserting = 0;
+
+	my $start =  $sam->cigar->start_pos;
+	my $end = $sam->cigar->end_pos;
+	say $inter "$start  --  $end";
+	my $counter = $sam->cigar->start_pos;
+
+	say $inter "Before";
+	while($counter <= $end)
+	{
+		if($master_alignment{$counter})
+		{
+			say $inter "$counter";
+			say $inter Dumper %{ $master_alignment{$counter} };
+		}
+		$counter++;
+	}
 
 	foreach my $cigar (@cigar_stack)
 	{		
@@ -77,7 +97,7 @@ foreach my $sam_line (@sam_lines)
 				if(!$soft_clipping && $first)
 				{
 					$soft_clipping = 1;
-					$master_alignment{$sam->cigar->start_pos-1}{"I"} += 1;
+					$master_alignment{$sam->cigar->start_pos}{"I"} += 1;
 					$first = 0;
 				}
 
@@ -86,7 +106,7 @@ foreach my $sam_line (@sam_lines)
 				elsif(!$soft_clipping && !$first)
 				{
 					$soft_clipping = 1;
-					$master_alignment{$sam->cigar->end_pos-1}{"I"} += 1;
+					$master_alignment{$sam->cigar->end_pos}{"I"} += 1;
 				}
 			}
 
@@ -117,11 +137,17 @@ foreach my $sam_line (@sam_lines)
 			when("I")
 			{
 				# Accouting
+				## TODO starting insertions can happen?!?!
 				$soft_clipping = 0;
 				if($first) { $first = 0;}
 
 				if(!$inserting)
 				{
+					## TODO FIX FIX FIX 
+					if($read_pointer = 1)
+					{
+						$master_alignment{$reference_pointer}{"I"} += 1;
+					}
 					$master_alignment{$reference_pointer-1}{"I"} += 1;
 					$inserting = 1;
 				}
@@ -129,13 +155,39 @@ foreach my $sam_line (@sam_lines)
 			}
 		}
 	}
+	say $inter "";
+	say $inter $sam->cigar->raw_string;
+	my $start =  $sam->cigar->start_pos;
+	my $end = $sam->cigar->end_pos;
+	say $inter "$start  --  $end";
+	print $inter "sam seq: ";
+	say $inter $sam->sequence->seq;
+	print $inter "reference: ";
+	my $counter = $sam->cigar->start_pos;
+	while($counter <= $end)
+	{
+		my $base = $genome->base_at($counter);
+		say $inter "$counter -> $base";
+		$counter++;
+	}
+
+	$counter = $sam->cigar->start_pos;
+	say $inter "After";
+	while($counter <= $end)
+	{
+		say $inter "$counter";
+		say $inter Dumper %{ $master_alignment{$counter} };
+		$counter++;
+	}
+
 }
 
 foreach my $key (sort( {$a <=> $b} keys(%master_alignment)))
 {
-	say "$key:";
+	say $output "$key:";
 	foreach my $base (keys(%{ $master_alignment{$key} }))
 	{
-		say "\t$base  => $master_alignment{$key}{$base}";
+		say $output "\t$base  => $master_alignment{$key}{$base}";
 	}
 }
+close output;
