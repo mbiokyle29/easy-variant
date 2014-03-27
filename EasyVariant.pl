@@ -4,11 +4,10 @@ use Genome;
 use Sam;
 use Getopt::Long;
 use File::Slurp;
-use Data::Printer;
-use Data::Dumper;
 use feature qw(say switch);
 
-my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio);
+# Predefine args
+my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio, $output);
 
 GetOptions (
 	"start=i" => \$start_pos,
@@ -16,47 +15,38 @@ GetOptions (
 	"sam=s" => \$sam_file,
 	"reference=s" => \$reference,
 	"depth=i" => \$min_depth,
-	"indel=i" => \$indel_ratio
+	"indel=f" => \$indel_ratio,
+	"output=s" => \$output
 );
 
+# Genome wide alignment results (This is where the magic happens!)
 my %master_alignment;
 
+# Check for needed args
 unless($sam_file && $reference)
 {
 	say "--reference and --sam flags are required";
 	die "EasyVariant.pl --reference ref --sam sam_file";
 }
 
-my $genome = Genome->new(
-	fasta => $reference
-);
+my $genome = Genome->new( fasta => $reference );
 
-unless($end_pos)
-{
-	$end_pos = $genome->length;
-}
+# Set defualt values if non were defined from command line
+unless($end_pos) { $end_pos = $genome->length; }
+unless($start_pos) { $start_pos = 1; }
+unless($min_depth) { $min_depth = 10; }
+unless($indel_ratio) { $indel_ratio = .5; }
 
-unless($start_pos)
-{
-	$start_pos = 1;
-}
-
-unless($min_depth)
-{
-	$min_depth = 10;
-}
-
-unless($indel_ratio)
-{
-	$indel_ratio = .5;
-}
-
+# Invalid range case
 if($end_pos < $start_pos)
 {
 	say "Ending Position Cannot be less that starting position!";
 	die "Please add valid values for --end and/or --start";
 }
 
+#################################################################
+# SAM processing: cigar+alignment -> genome wide alignment matrix
+#################################################################
 my @sam_lines = read_file($sam_file);
 foreach my $sam_line (@sam_lines)
 {
@@ -109,7 +99,10 @@ foreach my $sam_line (@sam_lines)
 				}
 			}
 
-			# When a D is popped, 
+			# When a D is popped we have a deletion
+			# Increment the deletion counter at this position in the reference
+			# Incremenet the reference pointer
+			# Do no increment the read pointer becuase this was a deletion (ie not in the read)
 			when("D")
 			{
 				# Accouting
@@ -158,7 +151,18 @@ foreach my $sam_line (@sam_lines)
 	}
 }
 
-open my $variants, ">", "variants";
+###################
+# SNP calling Block
+###################
+
+## Printing Args
+my $genome_name = $genome->name;
+unless ($output){ $output = $sam_file; }
+
+open my $variants, ">", $output;
+
+say $variants "EasyVariant caller results for $output file against $genome_name";
+say $variants "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
 my $ref_seq = $genome->seq;
 foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 {
@@ -184,11 +188,8 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 	}
 	next if($depth < $min_depth);
 	next if($wildtype eq uc($most_base));
-	if($most_base =~ m/[IX]/)
-	{
-		next if($most/$denominator < $indel_ratio);	
-	}
+	next if($most/$denominator < $indel_ratio);	
+
 	say $variants "$key: $wildtype --> $most_base";
-	say $variants Dumper $$master_alignment{$key};
 }
 close $variants;
