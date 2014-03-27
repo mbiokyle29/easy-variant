@@ -18,61 +18,38 @@ has 'end_pos' => (
 	isa => 'Int',
 	is => 'rw',
 	lazy => 1,
-	builder => '_build_end_pos'
+	builder => '_build_end'
 );
 
 has 'array' => (
 	isa => 'ArrayRef',
 	is => 'rw',
 	auto_deref => 1,
-	builder => '_build_array'
 );
 
 has 'stack' => (
 	isa => 'Str',
-	builder => '_build_stack',
 	is => 'rw',
-	lazy => 1
 );
 
 has 'length' => (
 	isa => 'Int',
 	is => 'rw',
-	lazy => 1,
-	builder => '_build_length'
 );
 
-has 'start_pos' => (
-	isa => 'Int',
-	builder => '_build_start',
-	is => 'rw',
-	lazy    => 1
-);
-
-has 'end_pos' => (
-	isa => 'Int',
-	builder => '_build_end',
-	is => 'rw',
-	lazy    => 1
-);
-
-sub _build_array
+sub BUILD
 {
-	my $self = shift;
+	my $self = shift;	
 	my $raw_string = $self->raw_string;
+	
 	my @array;
-
 	while($raw_string =~ m/(\d+[SDMI])/g)
 	{
 		push(@array, $1);
 	}
+	
+	$self->array(\@array);
 
-	return \@array; 
-}
-
-sub _build_stack
-{
-	my $self = shift;	
 	my $cigar_stack;
 	foreach my $chunk ($self->array)
 	{
@@ -80,12 +57,8 @@ sub _build_stack
 		my $push = $code x $chunk;
 		$cigar_stack .= $push;
 	}
-	return $cigar_stack;
-}
+	$self->stack($cigar_stack);
 
-sub _build_length
-{
-	my $self = shift;
 	my $length = 0;
 	foreach my $chunk ($self->array)
 	{
@@ -95,7 +68,7 @@ sub _build_length
 			$length += $chunk;
 		}
 	}
-	return $length;
+	$self->length($length);
 }
 
 sub _build_end

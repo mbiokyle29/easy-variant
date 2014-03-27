@@ -5,6 +5,8 @@ use DBI;
 use Data::Dumper;
 use File::Slurp;
 
+our $dbh = DBI->connect('dbi:mysql:genomes','genomes','ebvHACK958$');
+
 has 'length' => (
 	is  => 'ro',
 	isa => 'Int',
@@ -45,7 +47,6 @@ sub _build_length
 	my $self = shift;
 	my $name = $self->name;
 	my $countq = "SELECT position FROM $name ORDER BY position DESC LIMIT 1";
-	my $dbh = DBI->connect('dbi:mysql:genomes','genomes','ebvHACK958$');
 	my $sth = $dbh->prepare($countq);
 	$sth->execute();
 	
@@ -59,7 +60,6 @@ sub _build_seq
 	my $name = $self->name;
 	my $ref_seq;
 	my $query = "SELECT base FROM $name ORDER BY position ASC";
-	my $dbh = DBI->connect('dbi:mysql:genomes','genomes','ebvHACK958$');
 	my $sth = $dbh->prepare($query);
 	$sth->execute;
 	my $result = $sth->fetchall_arrayref;
@@ -76,7 +76,6 @@ sub BUILD
 	my $name = $self->name;
 
 	#Check if already exists save us some time
-	my $dbh = DBI->connect('dbi:mysql:genomes','genomes','ebvHACK958$');
 	my $table_check = "SHOW TABLES LIKE ?";
 	my $check_sth = $dbh->prepare($table_check);
 	$check_sth->execute($name);
@@ -127,8 +126,11 @@ sub base_at
 {
 	my $self = shift;
 	my $pos = shift;
-	$pos--;
-	return substr($self->seq, $pos,1); 
+	my $base_q = "SELECT base from EBV where position=?";
+	my $sth = $dbh->prepare($base_q);
+	$sth->execute($pos);
+	my $return = $sth->fetchrow_arrayref();
+	return $$return[0];
 }
 
 __PACKAGE__->meta->make_immutable;
