@@ -33,6 +33,13 @@ has 'name' => (
 	builder => '_build_name',
 );
 
+has 'seq' => (
+	is => 'ro',
+	isa => 'Str',
+	lazy => 1,
+	builder => '_build_seq'
+);
+
 sub _build_name
 {
 	my $self = shift;

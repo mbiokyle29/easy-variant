@@ -5,15 +5,18 @@ use Sam;
 use Getopt::Long;
 use File::Slurp;
 use Data::Printer;
+use Data::Dumper;
 use feature qw(say switch);
 
-my ($start_pos, $end_pos, $sam_file, $reference);
+my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio);
 
 GetOptions (
 	"start=i" => \$start_pos,
 	"end=i" => \$end_pos,
 	"sam=s" => \$sam_file,
-	"reference=s" => \$reference
+	"reference=s" => \$reference,
+	"depth=i" => \$min_depth,
+	"indel=i" => \$indel_ratio
 );
 
 my %master_alignment;
@@ -38,6 +41,16 @@ unless($start_pos)
 	$start_pos = 1;
 }
 
+unless($min_depth)
+{
+	$min_depth = 10;
+}
+
+unless($indel_ratio)
+{
+	$indel_ratio = .5;
+}
+
 if($end_pos < $start_pos)
 {
 	say "Ending Position Cannot be less that starting position!";
@@ -48,9 +61,9 @@ my @sam_lines = read_file($sam_file);
 foreach my $sam_line (@sam_lines)
 {
 	# Skip header lines and unaligned reads
-	next if ($sam_line =~ m/^@/);
+	next if($sam_line =~ m/^@/);
 	next if($sam_line =~ m/^(\S+\s+){2}\*/);
-
+	
 	# Create sam object
 	chomp($sam_line);
 	my $sam = Sam->new(raw_string => $sam_line);
@@ -66,9 +79,9 @@ foreach my $sam_line (@sam_lines)
 	my $first = 1;
 	my $soft_clipping = 0;
 	my $inserting = 0;
-
 	my $start =  $sam->cigar->start_pos;
 	my $end = $sam->cigar->end_pos;
+
 	foreach my $cigar (@cigar_stack)
 	{		
 		given($cigar)
@@ -145,9 +158,37 @@ foreach my $sam_line (@sam_lines)
 	}
 }
 
-open my $output, ">", "output";
-foreach my $key (sort( {$a <=> $b} keys(%master_alignment)))
+open my $variants, ">", "variants";
+my $ref_seq = $genome->seq;
+foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 {
+	my $wildtype = uc(substr($ref_seq, ($key-1), 1));
+	my $denominator = 0;
+	my $depth = 0;
+	my $most = 0;
+	my $most_base;
 
+	foreach my $call (keys($master_alignment{$key}))
+	{
+		if($call ne "I")
+		{
+			$denominator += $master_alignment{$key}{$call};
+		}
+
+		$depth += $master_alignment{$key}{$call};
+		if($master_alignment{$key}{$call} > $most)
+		{
+			$most = $master_alignment{$key}{$call};
+			$most_base = $call;
+		}
+	}
+	next if($depth < $min_depth);
+	next if($wildtype eq uc($most_base));
+	if($most_base =~ m/[IX]/)
+	{
+		next if($most/$denominator < $indel_ratio);	
+	}
+	say $variants "$key: $wildtype --> $most_base";
+	say $variants Dumper $$master_alignment{$key};
 }
-close $output;
+close $variants;
