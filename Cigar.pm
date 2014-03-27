@@ -57,6 +57,7 @@ sub BUILD
 		my $push = $code x $chunk;
 		$cigar_stack .= $push;
 	}
+
 	$self->stack($cigar_stack);
 
 	my $length = 0;

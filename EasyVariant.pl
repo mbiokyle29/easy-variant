@@ -4,7 +4,7 @@ use Genome;
 use Sam;
 use Getopt::Long;
 use File::Slurp;
-use Data::Dumper;
+use Data::Printer;
 use feature qw(say switch);
 
 my ($start_pos, $end_pos, $sam_file, $reference);
@@ -47,7 +47,11 @@ if($end_pos < $start_pos)
 my @sam_lines = read_file($sam_file);
 foreach my $sam_line (@sam_lines)
 {
+	# Skip header lines and unaligned reads
 	next if ($sam_line =~ m/^@/);
+	next if($sam_line =~ m/^(\S+\s+){2}\*/);
+
+	# Create sam object
 	chomp($sam_line);
 	my $sam = Sam->new(raw_string => $sam_line);
 
@@ -58,7 +62,6 @@ foreach my $sam_line (@sam_lines)
 	my $read_pointer = 1;
 	my @cigar_stack = split(//,$sam->cigar->stack);
 
-
 	# Flags
 	my $first = 1;
 	my $soft_clipping = 0;
@@ -66,8 +69,6 @@ foreach my $sam_line (@sam_lines)
 
 	my $start =  $sam->cigar->start_pos;
 	my $end = $sam->cigar->end_pos;
-	my $counter = $sam->cigar->start_pos;
-
 	foreach my $cigar (@cigar_stack)
 	{		
 		given($cigar)
@@ -122,13 +123,11 @@ foreach my $sam_line (@sam_lines)
 			when("I")
 			{
 				# Accouting
-				## TODO starting insertions can happen?!?!
 				$soft_clipping = 0;
 				if($first) { $first = 0;}
 
 				if(!$inserting)
 				{
-					## TODO FIX FIX FIX 
 					if($reference_pointer == 1)
 					{
 						$master_alignment{$genome->length}{"I"} += 1;
@@ -149,6 +148,6 @@ foreach my $sam_line (@sam_lines)
 open my $output, ">", "output";
 foreach my $key (sort( {$a <=> $b} keys(%master_alignment)))
 {
-	my $wildtype = $genome->base_at($key);
+
 }
 close $output;
