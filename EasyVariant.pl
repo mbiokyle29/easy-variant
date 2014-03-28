@@ -10,10 +10,12 @@ use feature qw(say switch);
 my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio, $output);
 
 GetOptions (
-	"start=i" => \$start_pos,
-	"end=i" => \$end_pos,
+	#Required arguments
 	"sam=s" => \$sam_file,
 	"reference=s" => \$reference,
+	# Optional Arguemts
+	"start=i" => \$start_pos,
+	"end=i" => \$end_pos,
 	"depth=i" => \$min_depth,
 	"indel=f" => \$indel_ratio,
 	"output=s" => \$output
@@ -22,7 +24,7 @@ GetOptions (
 # Genome wide alignment results (This is where the magic happens!)
 my %master_alignment;
 
-# Check for needed args
+# Check for required args
 unless($sam_file && $reference)
 {
 	say "--reference and --sam flags are required";
