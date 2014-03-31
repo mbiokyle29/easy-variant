@@ -1,4 +1,6 @@
 #!/usr/bin/perl
+use warnings;
+use strict;
 use lib "/home/kyle/lab/easy-variant/";
 use Genome;
 use Sam;
@@ -7,7 +9,7 @@ use File::Slurp;
 use feature qw(say switch);
 
 # Predefine args
-my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio, $output);
+my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio, $output, $stats);
 
 GetOptions (
 	#Required arguments
@@ -18,7 +20,8 @@ GetOptions (
 	"end=i" => \$end_pos,
 	"depth=i" => \$min_depth,
 	"indel=f" => \$indel_ratio,
-	"output=s" => \$output
+	"output=s" => \$output,
+	"stats=i" => \$stats,
 );
 
 # Genome wide alignment results (This is where the magic happens!)
@@ -38,6 +41,7 @@ unless($end_pos) { $end_pos = $genome->length; }
 unless($start_pos) { $start_pos = 1; }
 unless($min_depth) { $min_depth = 10; }
 unless($indel_ratio) { $indel_ratio = .5; }
+unless($stats) { $stats = 0; }
 
 # Invalid range case
 if($end_pos < $start_pos)
@@ -159,12 +163,26 @@ foreach my $sam_line (@sam_lines)
 
 ## Printing Args
 my $genome_name = $genome->name;
-unless ($output){ $output = $sam_file; }
+my $genome_length = $genome->length;
+unless ($output){ $output = $sam_file."output"; }
+my $stat_file;
 
+## Stats FILE
+if($stats)
+{
+	my $stat_out = $output.".stats";
+	open $stat_file, ">", $stat_out;
+}
+
+## INFO HEADER
 open my $variants, ">", $output;
-
 say $variants "EasyVariant caller results for $output file against $genome_name";
 say $variants "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
+
+# Counter to track number of positions that had the right depth
+my $passed = 0;
+my $passed_positions;
+
 my $ref_seq = $genome->seq;
 foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 {
@@ -188,10 +206,29 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 			$most_base = $call;
 		}
 	}
+	# Depth check
 	next if($depth < $min_depth);
+	$passed++;
+	
+	if($stats)
+	{
+		my $concat = $key."\n";
+		$passed_positions.=$concat;
+	}
+	
+	# Variant and ratio of variance check
 	next if($wildtype eq uc($most_base));
 	next if($most/$denominator < $indel_ratio);	
 
 	say $variants "$key: $wildtype --> $most_base";
 }
+
+my $depth_percent = ($passed/$genome_length)*100;
+say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $genome_length, ($depth_percent%)";
 close $variants;
+
+if($stats && $stat_file)
+{
+	print $stat_file $passed_positions;
+	close $stat_file;
+}
