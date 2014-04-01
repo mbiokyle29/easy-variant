@@ -6,6 +6,7 @@ use Genome;
 use Sam;
 use Getopt::Long;
 use File::Slurp;
+use Data::Dumper;
 use feature qw(say switch);
 
 # Predefine args
@@ -179,6 +180,10 @@ open my $variants, ">", $output;
 say $variants "EasyVariant caller results for $output file against $genome_name";
 say $variants "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
 
+open my $all_base, ">", $output.".perbase";
+say $all_base "EasyVariant caller base results for $output file against $genome_name";
+say $all_base "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
+
 # Counter to track number of positions that had the right depth
 my $passed = 0;
 my $passed_positions;
@@ -221,11 +226,20 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 	next if($most/$denominator < $indel_ratio);	
 
 	say $variants "$key: $wildtype --> $most_base";
+
+	say $all_base "At position: $key";
+	my $ref = $master_alignment{$key};
+	for my $base (keys(%$ref))
+	{
+		say $all_base "$base -> $$ref{$base}";
+	}
+	say $all_base "";
 }
 
 my $depth_percent = ($passed/$genome_length)*100;
 say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $genome_length, ($depth_percent%)";
 close $variants;
+close $all_base;
 
 if($stats && $stat_file)
 {
