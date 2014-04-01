@@ -10,7 +10,7 @@ use Data::Dumper;
 use feature qw(say switch);
 
 # Predefine args
-my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio, $output, $stats);
+my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio, $output, $stats, $repeat_string, $ignore_ranges;
 
 GetOptions (
 	#Required arguments
@@ -23,6 +23,8 @@ GetOptions (
 	"indel=f" => \$indel_ratio,
 	"output=s" => \$output,
 	"stats=i" => \$stats,
+	"repeat-ranges" => \$repeat_string,
+	"ignore-ranges" => \$ignore_ranges,
 );
 
 # Genome wide alignment results (This is where the magic happens!)
@@ -236,13 +238,74 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 	say $all_base "";
 }
 
-my $depth_percent = ($passed/$genome_length)*100;
-say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $genome_length, ($depth_percent%)";
+##########################################
+# Calculate the Denominator for coverage #
+##########################################
+my $coverage_denominator = $genome_length;
+if($ignore_ranges)
+{
+	# Convert entered string into hash(start)->end
+	my $ignore = parse_ranges($ignore_ranges);
+	my $ignore_count = subtract_ignore($ignore, $genome_length);
+	$coverage_denominator -= $ignore_count;
+	say $variants "Dropping $ignore_count from coverage, becuase --ignore $ignore_ranges";
+}
+
+# Depth coverage of all bases, minus any ignored region
+my $depth_percent = ($passed/$coverage_denominator)*100;
+say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $coverage_denominator, ($depth_percent%)";
+
+
+
+
+
+# Close all file handles
 close $variants;
 close $all_base;
-
 if($stats && $stat_file)
 {
 	print $stat_file $passed_positions;
 	close $stat_file;
+}
+
+
+
+###############
+# SUBROUTINES #
+###############
+########################################
+# Convert Range String into range hash #
+########################################
+sub parse_ranges
+{
+	# Formated range range string x-y,a-b,c-d
+	my $range_string = shift;
+	my @ranges = split(",", $range_string);
+	my %ranges_hash;
+	foreach my $range (@ranges)
+	{
+		$range =~ m/(\d+)-(\d+)/;
+		my $lower = $1;
+		my $upper = $2;
+		$ranges_hash{$lower}=$upper;
+	}
+	return \%ranges_hash;
+}
+
+##################################################
+# Calculate length of genome minus ignore ranges #
+##################################################
+sub subtract_ignore
+{
+	my ($ignore, $genome_length) = @_;
+	my $ignore_count = 0;
+	for my $start (%$ignore)
+	{
+		my $end = $$ignore{$start};
+		unless($end < $start)
+		{
+			$ignore_count += (($end - $start)+1);
+		}	
+	}
+	return $genome_length-$ignore_count;
 }
