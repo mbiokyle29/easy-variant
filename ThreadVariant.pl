@@ -187,6 +187,20 @@ sub parse_sam
         {       
             given($cigar)
             {
+                a
+                unless(exists($master_alignment{$reference_pointer}))
+                {
+                    my %bases :shared =
+                    (
+                        A => 0,
+                        T => 0,
+                        G => 0,
+                        C => 0,
+                        X => 0,
+                        I => 0,
+                    );
+                    $master_alignment{$reference_pointer} = \%bases;
+                }
                 # To handle S, or soft clipping values that appear only at the start and end of the cigar string
                 when("S")
                 {
@@ -220,7 +234,7 @@ sub parse_sam
                     $soft_clipping = 0;
                     $inserting = 0;
                     if($first) { $first = 0;}
-                    
+
                     $master_alignment{$reference_pointer}{"X"} += 1;
                     $reference_pointer++;
                 }
