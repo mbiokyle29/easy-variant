@@ -1,4 +1,4 @@
-EasyVariant.pl
+<h1>EasyVariant.pl</h1>
 
 This 'script' is a miniature, basic variant caller, it processes a sam file containing matched alignments
 Each SAM read is formed into a Moose object, containing Sequence objects and Cigar objects
