@@ -24,7 +24,7 @@
 #################################################################################################################
 use warnings;
 use strict;
-use lib "/home/kyle/lab/easy-variant/";
+use lib "/home/kyle/lab/easy-variant/lib/";
 use Genome;
 use Sam;
 use Getopt::Long;
