@@ -9,8 +9,10 @@ use File::Slurp;
 use Data::Dumper;
 use feature qw(say switch);
 
-# Predefine args
-my ($start_pos, $end_pos, $sam_file, $reference, $min_depth, $indel_ratio, $output, $stats, $repeat_string, $ignore_ranges;
+# Predefine args for GetOpts
+my ($start_pos, $end_pos, $sam_file, $reference);
+my ($min_depth, $indel_ratio, $output);
+my ($repeat_ranges, $ignore_ranges, $all_bases);
 
 GetOptions (
 	#Required arguments
@@ -22,13 +24,26 @@ GetOptions (
 	"depth=i" => \$min_depth,
 	"indel=f" => \$indel_ratio,
 	"output=s" => \$output,
-	"stats=i" => \$stats,
-	"repeat-ranges" => \$repeat_string,
-	"ignore-ranges" => \$ignore_ranges,
+	"repeat-ranges=s" => \$repeat_ranges,
+	"ignore-ranges=s" => \$ignore_ranges,
+	"all-bases=i" => \$all_bases,
 );
 
 # Genome wide alignment results (This is where the magic happens!)
 my %master_alignment;
+
+# Hashes for optional ignore and repeat regions key = start val = end
+my $ignore_hash;
+my $repeat_hash;
+if($ignore_ranges)
+{
+	$ignore_hash = parse_ranges($ignore_ranges);
+}
+if($repeat_ranges)
+{
+	$repeat_hash = parse_ranges($repeat_ranges);
+}
+
 
 # Check for required args
 unless($sam_file && $reference)
@@ -44,7 +59,7 @@ unless($end_pos) { $end_pos = $genome->length; }
 unless($start_pos) { $start_pos = 1; }
 unless($min_depth) { $min_depth = 10; }
 unless($indel_ratio) { $indel_ratio = .5; }
-unless($stats) { $stats = 0; }
+unless($all_bases) {$all_bases = 0; }
 
 # Invalid range case
 if($end_pos < $start_pos)
@@ -67,8 +82,15 @@ foreach my $sam_line (@sam_lines)
 	chomp($sam_line);
 	my $sam = Sam->new(raw_string => $sam_line);
 
+	# Check if sam falls completely within the chosen range
 	next if($end_pos < $sam->cigar->start_pos);
 	next if($start_pos > $sam->cigar->end_pos);
+
+	#Check if sam falls completely within an ignore range
+	if($ignore_hash)
+	{
+		next if ignore_sam($sam->cigar->start_pos, $sam->cigar->end_pos, $ignore_hash);
+	}
 
 	my $reference_pointer = $sam->cigar->start_pos;
 	my $read_pointer = 1;
@@ -170,29 +192,34 @@ my $genome_length = $genome->length;
 unless ($output){ $output = $sam_file."output"; }
 my $stat_file;
 
-## Stats FILE
-if($stats)
-{
-	my $stat_out = $output.".stats";
-	open $stat_file, ">", $stat_out;
-}
-
 ## INFO HEADER
 open my $variants, ">", $output;
-say $variants "EasyVariant caller results for $output file against $genome_name";
+say $variants "EasyVariant caller results for $sam_file file against $genome_name";
 say $variants "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
 
-open my $all_base, ">", $output.".perbase";
-say $all_base "EasyVariant caller base results for $output file against $genome_name";
-say $all_base "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
+## If all_bases flag was set initalize the file handle and print header
+my $all_base;
+if($all_bases)
+{
+	open $all_base, ">", $output.".perbase";
+	say $all_base "EasyVariant caller base results for $sam_file file against $genome_name";
+	say $all_base "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
+}
 
 # Counter to track number of positions that had the right depth
 my $passed = 0;
-my $passed_positions;
+my $unique_passed = 0;
+my $repeat_passed = 0;
 
 my $ref_seq = $genome->seq;
 foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 {
+	# First make sure base is not in the ignore range
+	if($ignore_hash)
+	{
+		next if in_range($key, $ignore_hash);
+	}
+
 	my $wildtype = uc(substr($ref_seq, ($key-1), 1));
 	my $denominator = 0;
 	my $depth = 0;
@@ -205,8 +232,10 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 		{
 			$denominator += $master_alignment{$key}{$call};
 		}
-
-		$depth += $master_alignment{$key}{$call};
+		if($call ne "X" && $call ne "I")
+		{
+			$depth += $master_alignment{$key}{$call};
+		}
 		if($master_alignment{$key}{$call} > $most)
 		{
 			$most = $master_alignment{$key}{$call};
@@ -216,63 +245,78 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 	# Depth check
 	next if($depth < $min_depth);
 	$passed++;
-	
-	if($stats)
+
+	# Check repeat / Unique counters and increment
+	if($repeat_hash)
 	{
-		my $concat = $key."\n";
-		$passed_positions.=$concat;
+		if(in_range($key, $repeat_hash))
+		{
+			$repeat_passed++;
+		}
+		else
+		{
+			$unique_passed++;
+		}
 	}
-	
+
 	# Variant and ratio of variance check
 	next if($wildtype eq uc($most_base));
 	next if($most/$denominator < $indel_ratio);	
 
-	say $variants "$key: $wildtype --> $most_base";
 
-	say $all_base "At position: $key";
-	my $ref = $master_alignment{$key};
-	for my $base (keys(%$ref))
+	say $variants "$key: $wildtype --> $most_base";
+	if($all_bases)
 	{
-		say $all_base "$base -> $$ref{$base}";
+		say $all_base "At position: $key";
+		my $ref = $master_alignment{$key};
+		for my $base (keys(%$ref))
+		{
+			say $all_base "$base -> $$ref{$base}";
+		}
+		say $all_base "";
 	}
-	say $all_base "";
 }
 
-##########################################
-# Calculate the Denominator for coverage #
-##########################################
+###########################################
+# Calculate the Denominators for coverage #
+###########################################
 my $coverage_denominator = $genome_length;
-if($ignore_ranges)
+say $variants "################# COVERAGE INFORMATION ##################\n";
+if($ignore_hash)
 {
 	# Convert entered string into hash(start)->end
-	my $ignore = parse_ranges($ignore_ranges);
-	my $ignore_count = subtract_ignore($ignore, $genome_length);
+	my $ignore_count = count_ranges($ignore_hash);
 	$coverage_denominator -= $ignore_count;
-	say $variants "Dropping $ignore_count from coverage, becuase --ignore $ignore_ranges";
+	$ignore_ranges =~ s/,/, /g;
+	say $variants "\nDropping $ignore_count bases from total coverage, becuase --ignore $ignore_ranges";
 }
-
 # Depth coverage of all bases, minus any ignored region
-my $depth_percent = ($passed/$coverage_denominator)*100;
+my $depth_percent = ($passed/$coverage_denominator)*100; # TODO DONT KEEP TRACK
 say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $coverage_denominator, ($depth_percent%)";
 
+# Now handle depth coverage for unique regions
+if($repeat_hash)
+{
+	my $repeat_count = count_ranges($repeat_hash);
+	$coverage_denominator -= $repeat_count;
+	my $unique_percent = ($unique_passed/$coverage_denominator)*100;
+	my $repeat_percent = ($repeat_passed/$repeat_count)*100;
 
-
-
+	# Make it look nice
+	$repeat_ranges =~ s/,/, /g;
+	say $variants "Using the following repeat regions:  $repeat_ranges\n";
+	say $variants "$unique_passed unique bases had a min depth of $min_depth, out of the unique total of $coverage_denominator, ($unique_percent%)";
+	say $variants "$repeat_passed repeat bases had a min depth of $min_depth, out of the repeat total of $repeat_count, ($repeat_percent%)";
+}
 
 # Close all file handles
 close $variants;
 close $all_base;
-if($stats && $stat_file)
-{
-	print $stat_file $passed_positions;
-	close $stat_file;
-}
-
-
 
 ###############
 # SUBROUTINES #
 ###############
+
 ########################################
 # Convert Range String into range hash #
 ########################################
@@ -292,20 +336,61 @@ sub parse_ranges
 	return \%ranges_hash;
 }
 
-##################################################
-# Calculate length of genome minus ignore ranges #
-##################################################
-sub subtract_ignore
+############################################
+# Calculate the length of repeat range set #
+############################################
+sub count_ranges
 {
-	my ($ignore, $genome_length) = @_;
-	my $ignore_count = 0;
-	for my $start (%$ignore)
+	my $range_hash = shift;
+	my $count = 0;
+	foreach my $start (keys(%$range_hash))
 	{
-		my $end = $$ignore{$start};
+		my $end = $$range_hash{$start};
+		# Sanity check
 		unless($end < $start)
 		{
-			$ignore_count += (($end - $start)+1);
-		}	
+			# Inclusive length of range
+			$count+= (($end - $start)+1);
+		}
 	}
-	return $genome_length-$ignore_count;
+	return $count;
+}
+
+######################################################
+# See if SAM falls entierly within the ignore ranges #
+######################################################
+sub ignore_sam
+{
+	my ($sam_start, $sam_end, $ignore_hash) = @_;
+	my $ignore = 0;
+	foreach my $start (keys(%$ignore_hash))
+	{
+		my $end = $$ignore_hash{$start};
+		if($end >= $sam_end && $start <= $sam_start)
+		{
+			say "Ignoreing sam $sam_start -> $sam_end";
+			$ignore = 1;
+			last;
+		}
+	}
+	return $ignore;
+}
+
+#################################################
+# See if a given position is in a set of ranges #
+#################################################
+sub in_range
+{
+	my ($position, $ranges) = @_;
+	my $in_ranges = 0;
+	foreach my $start (keys(%$ranges))
+	{
+		my $end = $$ranges{$start};
+		if($start <= $position && $position <= $end)
+		{
+			$in_ranges = 1;
+			last;
+		}
+	}
+	return $in_ranges;
 }
