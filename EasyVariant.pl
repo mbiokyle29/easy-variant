@@ -1,4 +1,27 @@
 #!/usr/bin/perl
+#################################################################################################################1
+# EasyVariant.pl --sam samfile --reference fasta/fa 
+# This 'script' is a miniature, basic variant caller, it processes a sam file containing matched alignments
+# Each SAM read is formed into a Moose object, containing Sequence objects and Cigar objects
+# The SAM is then manipulated, and the Cigar string is parsed to determine what exactly the alignment determined
+# The number of A,T,C, and G is tracked for each base position, along with X for deletions and I for insertions
+# An insertion at what would be the 'new' base 10 is counted at the old base 9 (the base preceding the insertion)
+# The optional arguments allow for a decent amount of fine tuning, including:
+# -choosing specific ranges to only include
+# -ignoreing a set of ranges
+# -designating a set of ranges as repeat regions (For coverage statistics)
+# -getting not only the variant calls, but the ATCGXI tally for each call
+#
+# Notes|Warnings|Disclaimer
+# 	Using the --start --end flags, with the other range functions may cause unintended behvaior
+#	best to only use one (start/end) or (ignore and repeat)
+# 
+#	Be sure to set use lib to the correct dir for the Moose modules
+#
+#	Range strings must be entered as int-int,int-int !!!
+#	
+#	The Genome package is backed by mysql, and might take some configuration
+#################################################################################################################
 use warnings;
 use strict;
 use lib "/home/kyle/lab/easy-variant/";
@@ -6,7 +29,6 @@ use Genome;
 use Sam;
 use Getopt::Long;
 use File::Slurp;
-use Data::Dumper;
 use feature qw(say switch);
 
 # Predefine args for GetOpts
@@ -29,12 +51,19 @@ GetOptions (
 	"all-bases=i" => \$all_bases,
 );
 
+# Check for required args
+unless($sam_file && $reference)
+{
+	say "--reference and --sam flags are required";
+	die "EasyVariant.pl --reference ref --sam sam_file";
+}
+
 # Genome wide alignment results (This is where the magic happens!)
 my %master_alignment;
 
-# Hashes for optional ignore and repeat regions key = start val = end
-my $ignore_hash;
-my $repeat_hash;
+# Hashes for optional ignore and repeat regions key = start, val = end
+# If the flages were given at command line, parse the strings into hashes
+my ($ignore_hash, $repeat_hash);
 if($ignore_ranges)
 {
 	$ignore_hash = parse_ranges($ignore_ranges);
@@ -44,14 +73,7 @@ if($repeat_ranges)
 	$repeat_hash = parse_ranges($repeat_ranges);
 }
 
-
-# Check for required args
-unless($sam_file && $reference)
-{
-	say "--reference and --sam flags are required";
-	die "EasyVariant.pl --reference ref --sam sam_file";
-}
-
+# 'Build' the genome, hopefully it's already in mysql
 my $genome = Genome->new( fasta => $reference );
 
 # Set defualt values if non were defined from command line
@@ -92,8 +114,11 @@ foreach my $sam_line (@sam_lines)
 		next if ignore_sam($sam->cigar->start_pos, $sam->cigar->end_pos, $ignore_hash);
 	}
 
+	# Pointers to walk the Sam sequence and genome sequence
 	my $reference_pointer = $sam->cigar->start_pos;
 	my $read_pointer = 1;
+	
+	# The cigar stack, from 1M1D3M to MDMMM
 	my @cigar_stack = split(//,$sam->cigar->stack);
 
 	# Flags
@@ -103,11 +128,13 @@ foreach my $sam_line (@sam_lines)
 	my $start =  $sam->cigar->start_pos;
 	my $end = $sam->cigar->end_pos;
 
+	# Iterate through each 'Letter' of the cigar stack
 	foreach my $cigar (@cigar_stack)
 	{		
 		given($cigar)
 		{
 			# To handle S, or soft clipping values that appear only at the start and end of the cigar string
+			# We do only one increment for a run of S's, Dont increment pointers b/c seq was clipped off
 			when("S")
 			{
 				$inserting = 0;
@@ -116,9 +143,19 @@ foreach my $sam_line (@sam_lines)
 				# The postion one before the start of the cigar alignment
 				if(!$soft_clipping && $first)
 				{
+					# Set the nessecary flags
 					$soft_clipping = 1;
-					$master_alignment{$sam->cigar->start_pos}{"I"} += 1;
 					$first = 0;
+					
+					# If we are at base number 1, increment the I at last positions
+					if($reference_pointer == 1)
+					{
+						$master_alignment{$genome->length}{"I"} += 1;
+					}
+					else
+					{
+						$master_alignment{$reference_pointer-1}{"I"} += 1;
+					}
 				}
 
 				# Handle the ending softclip, increment the insertion for
@@ -145,6 +182,9 @@ foreach my $sam_line (@sam_lines)
 				$reference_pointer++;
 			}
 
+			# When an M is popped we have a match/mismatch
+			# Increment the counter for what ever base is at the position of sam read pointer
+			# Increment both counters
 			when("M")
 			{
 				# Accouting
@@ -156,7 +196,10 @@ foreach my $sam_line (@sam_lines)
 				$reference_pointer++;
 				$read_pointer++;
 			}
-
+			
+			# When an I is poped we have an insertion
+			# Similar to the S, we just increment the I atprior base (check if its the first)
+			# and increment the read pointer
 			when("I")
 			{
 				# Accouting
@@ -182,9 +225,9 @@ foreach my $sam_line (@sam_lines)
 	}
 }
 
-###################
-# SNP calling Block
-###################
+#####################
+# SNP calling Block #
+#####################
 
 ## Printing Args
 my $genome_name = $genome->name;
@@ -206,11 +249,17 @@ if($all_bases)
 	say $all_base "With: \n\t depth cutoff = $min_depth \n\t call cutoff = $indel_ratio\n";
 }
 
-# Counter to track number of positions that had the right depth
+# Counters to track number of positions that had the right depth
+# Conditionally set the unique/repeat counters if enabled
 my $passed = 0;
-my $unique_passed = 0;
-my $repeat_passed = 0;
+my ($unique_passed, $repeat_passed);
+if($repeat_hash) 
+{ 
+	$repeat_passed = 0;
+	$unique_passed = 0; 
+}
 
+# Get the whole reference sequence, total the tallys in the master alignment and compare
 my $ref_seq = $genome->seq;
 foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 {
@@ -221,17 +270,21 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 	}
 
 	my $wildtype = uc(substr($ref_seq, ($key-1), 1));
-	my $denominator = 0;
-	my $depth = 0;
-	my $most = 0;
+	
+	# Set up things for the tallying
 	my $most_base;
-
+	my $denominator = 0; 
+	my $depth = 0; 
+	my $most = 0;
 	foreach my $call (keys($master_alignment{$key}))
 	{
+		# The denominator is A+T+C+G+X
 		if($call ne "I")
 		{
 			$denominator += $master_alignment{$key}{$call};
 		}
+
+		# The depth is just A+T+C+G
 		if($call ne "X" && $call ne "I")
 		{
 			$depth += $master_alignment{$key}{$call};
@@ -249,22 +302,18 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 	# Check repeat / Unique counters and increment
 	if($repeat_hash)
 	{
-		if(in_range($key, $repeat_hash))
-		{
-			$repeat_passed++;
-		}
-		else
-		{
-			$unique_passed++;
-		}
+		if(in_range($key, $repeat_hash)) { $repeat_passed++; }
+		else { $unique_passed++; }
 	}
 
 	# Variant and ratio of variance check
 	next if($wildtype eq uc($most_base));
 	next if($most/$denominator < $indel_ratio);	
 
-
+	# If we have made it this far, we have a variant!
 	say $variants "$key: $wildtype --> $most_base";
+	
+	# Conditionally print detailed base information
 	if($all_bases)
 	{
 		say $all_base "At position: $key";
@@ -280,8 +329,10 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 ###########################################
 # Calculate the Denominators for coverage #
 ###########################################
-my $coverage_denominator = $genome_length;
 say $variants "################# COVERAGE INFORMATION ##################\n";
+
+# The total bases for coverage, can be less then genome length if there are ignore ranges
+my $coverage_denominator = $genome_length;
 if($ignore_hash)
 {
 	# Convert entered string into hash(start)->end
@@ -290,6 +341,7 @@ if($ignore_hash)
 	$ignore_ranges =~ s/,/, /g;
 	say $variants "\nDropping $ignore_count bases from total coverage, becuase --ignore $ignore_ranges";
 }
+
 # Depth coverage of all bases, minus any ignored region
 my $depth_percent = ($passed/$coverage_denominator)*100; # TODO DONT KEEP TRACK
 say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $coverage_denominator, ($depth_percent%)";
@@ -311,7 +363,7 @@ if($repeat_hash)
 
 # Close all file handles
 close $variants;
-close $all_base;
+if($all_bases) { close $all_base; }
 
 ###############
 # SUBROUTINES #
