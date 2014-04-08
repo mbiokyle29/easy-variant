@@ -36,6 +36,10 @@ my ($start_pos, $end_pos, $sam_file, $reference);
 my ($min_depth, $indel_ratio, $output);
 my ($repeat_ranges, $ignore_ranges, $all_bases);
 
+### PRINT SHIM
+my $watch_ranges;
+###
+
 GetOptions (
 	#Required arguments
 	"sam=s" => \$sam_file,
@@ -49,6 +53,7 @@ GetOptions (
 	"repeat-ranges=s" => \$repeat_ranges,
 	"ignore-ranges=s" => \$ignore_ranges,
 	"all-bases=i" => \$all_bases,
+	"watch-ranges=s" => \$watch_ranges,
 );
 
 # Check for required args
@@ -73,20 +78,34 @@ if($repeat_ranges)
 	$repeat_hash = parse_ranges($repeat_ranges);
 }
 
+### PRINT SHIM##########
+my $watch_hash;
+my $watch_file;
+if($watch_ranges)
+{
+	my $watch_name;
+	if($output) {$watch_name = $output; }
+	else { $watch_name = $sam_file.".watch"; }
+	$watch_hash = parse_ranges($watch_ranges);
+	open $watch_file, ">", $watch_name;
+}
+##############
+
 # 'Build' the genome, hopefully it's already in mysql
+# Otherwise this might take awhile
 my $genome = Genome->new( fasta => $reference );
 
 # Set defualt values if non were defined from command line
-unless($end_pos) { $end_pos = $genome->length; }
-unless($start_pos) { $start_pos = 1; }
-unless($min_depth) { $min_depth = 10; }
+unless($end_pos)     { $end_pos = $genome->length; }
+unless($start_pos)   { $start_pos = 1; }
+unless($min_depth)   { $min_depth = 10; }
 unless($indel_ratio) { $indel_ratio = .5; }
-unless($all_bases) {$all_bases = 0; }
+unless($all_bases)   { $all_bases = 0; }
 
 # Invalid range case
 if($end_pos < $start_pos)
 {
-	say "Ending Position Cannot be less that starting position!";
+	say "Ending Position Cannot be less than starting position!";
 	die "Please add valid values for --end and/or --start";
 }
 
@@ -127,6 +146,20 @@ foreach my $sam_line (@sam_lines)
 	my $inserting = 0;
 	my $start =  $sam->cigar->start_pos;
 	my $end = $sam->cigar->end_pos;
+
+	### PRINT SHIM
+	if($watch_hash)
+	{
+		for my $pos ($start..$end)
+		{
+			if(in_range($pos, $watch_hash))
+			{
+				say $watch_file $sam->raw_string;
+				last;
+			}
+		}
+	}
+	###
 
 	# Iterate through each 'Letter' of the cigar stack
 	foreach my $cigar (@cigar_stack)
@@ -232,7 +265,7 @@ foreach my $sam_line (@sam_lines)
 ## Printing Args
 my $genome_name = $genome->name;
 my $genome_length = $genome->length;
-unless ($output){ $output = $sam_file."output"; }
+unless ($output){ $output = $sam_file.".output"; }
 my $stat_file;
 
 ## INFO HEADER
@@ -364,6 +397,7 @@ if($repeat_hash)
 # Close all file handles
 close $variants;
 if($all_bases) { close $all_base; }
+if($watch_file) { close $watch_file; }
 
 ###############
 # SUBROUTINES #
