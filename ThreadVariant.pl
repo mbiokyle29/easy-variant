@@ -1,4 +1,8 @@
 #!/usr/bin/perl
+
+###################
+## THREAD SET UP ##
+###################
 use warnings;
 use strict;
 use threads;
@@ -7,32 +11,35 @@ use Thread::Queue;
 use lib "/home/kyle/lab/easy-variant/lib/";
 use Sam;
 
-###################
-## THREAD SET UP ##
-###################
-# Genome wide alignment results (This is where the magic happens!)
-my %master_alignment :shared;  # FINAL RESULT TO BE SHARED
-my $queue = Thread::Queue->new();
+# QUEUES #
+my $work_queue = Thread::Queue->new();
+my @results_queues :shared;
 
 # Determine number of threads to use in pool and create them
 my $max_threads = `nproc`;
-$max_threads--;
-my @threads;
-for(1..$max_threads)
+
+# WORKERS #
+my $workers = $max_threads - 2;
+my @worker_threads;
+for(1..5)
 {
-    push(@threads, threads->create('parse_sam'));
+    push(@worker_threads, threads->create('parse_sam', $result_index));
+    push(@results_queues, Thread::Queue->new());
+
 }
 
+
+###################
+## MAIN SET UP   ##
+###################
 use Genome;
 use Getopt::Long;
 use File::Slurp;
-use Data::Printer;
 use feature qw(say switch);
-# Predefine args
-my ($start_pos, $end_pos, $sam_file, $reference, $output, $min_depth);
-$min_depth = 1;
-my $indel_ratio = .5;
 
+# Predefine args
+my ($start_pos, $end_pos, $sam_file, $reference, $output);
+my ($indel_ratio, $min_depth);
 GetOptions 
 (
     #Required arguments
@@ -42,6 +49,8 @@ GetOptions
     "start=i" => \$start_pos,
     "end=i" => \$end_pos,
     "output=s" => \$output,
+    "depth=i" => \$min_depth,
+    "indel=f" => \$indel_ratio,
 );
 
 # Check for required args
@@ -76,19 +85,24 @@ foreach my $sam_line (@sam_lines)
     
     # Create sam object
     chomp($sam_line);
+    
     # Queue the SAM for processing
-    $queue->enqueue($sam_line);
+    $work_queue->enqueue($sam_line);
 }
 
 # Signal end of data, wait for threads to finish
-$queue->end();
-$_->join for @threads;
-
+my @results;
+$work_queue->end();
+$_->join() for @worker_threads;
+$results_queue->end();
+my $master_alignment = $result_thread->join();
 
 ###################
 # SNP calling Block
 ###################
 
+unless($indel_ratio) { $indel_ratio = .5; }
+unless($min_depth) { $min_depth = 10; }
 ## Printing Args
 my $genome_name = $genome->name;
 my $genome_length = $genome->length;
@@ -104,7 +118,7 @@ my $passed = 0;
 my $passed_positions;
 
 my $ref_seq = $genome->seq;
-foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
+foreach my $key (sort({ $a <=> $b} keys(%$master_alignment)))
 {
     my $wildtype = uc(substr($ref_seq, ($key-1), 1));
     my $denominator = 0;
@@ -112,17 +126,17 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
     my $most = 0;
     my $most_base;
 
-    foreach my $call (keys($master_alignment{$key}))
+    foreach my $call (keys(% { $$master_alignment{$key} }))
     {
         if($call ne "I")
         {
-            $denominator += $master_alignment{$key}{$call};
+            $denominator += $$master_alignment{$key}{$call};
         }
 
-        $depth += $master_alignment{$key}{$call};
-        if($master_alignment{$key}{$call} > $most)
+        $depth += $$master_alignment{$key}{$call};
+        if($$master_alignment{$key}{$call} > $most)
         {
-            $most = $master_alignment{$key}{$call};
+            $most = $$master_alignment{$key}{$call};
             $most_base = $call;
         }
     }
@@ -141,15 +155,28 @@ my $depth_percent = ($passed/$genome_length)*100;
 say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $genome_length, ($depth_percent%)";
 close $variants;
 
+sub merge_result
+{
+    my %master_alignment;
+    while(defined(my $local = $results_queue->dequeue()))
+    {
+        foreach my $position (keys($local))
+        {
+            foreach my $call (keys($$local{$position}))
+            {
+                $master_alignment{$position}{$call} += $$local{$position}{$call};
+            }
+        }
+    }
+    return \%master_alignment;
+}
+
 sub parse_sam 
 {
-    while(defined (my $sam_line = $queue->dequeue()))
+    while(defined (my $sam_line = $work_queue->dequeue()))
     {
+        my %local_alignment;
         my $sam = Sam->new(raw_string => $sam_line);
-        $sam->cigar;
-        #next if($end_pos < $sam->cigar->start_pos);
-        #next if($start_pos > $sam->cigar->end_pos);
-
         my $reference_pointer = $sam->cigar->start_pos;
         my $read_pointer = 1;
         my @cigar_stack = split(//,$sam->cigar->stack);
@@ -162,142 +189,75 @@ sub parse_sam
         my $start =  $sam->cigar->start_pos;
         my $end = $sam->cigar->end_pos;
 
-        unless($master_alignment{$sam->cigar->start_pos})
-        {
-            my %bases :shared = 
-            (
-                A => 0,
-                T => 0,
-                G => 0,
-                C => 0,
-                X => 0,
-                I => 0,
-            );
-            lock(%master_alignment);
-            $master_alignment{$sam->cigar->start_pos} = \%bases;
-        }
-
-        unless($master_alignment{$sam->cigar->end_pos})
-        {
-            my %bases :shared = (
-                A => 0,
-                T => 0,
-                G => 0,
-                C => 0,
-                X => 0,
-                I => 0,
-            );
-            lock(%master_alignment);
-            $master_alignment{$sam->cigar->end_pos} = \%bases;
-        }
-
         foreach my $cigar (@cigar_stack)
         {
-            ## NASTY HANDLE OF AUTO VIVI
-            # We could possibly access the following places
-            #  $sam->cigar->start_pos
-            #  $sam->cigar->end_pos
-            #  $reference_pointer
-            #  $reference_pointer-1
-
-            unless($master_alignment{$reference_pointer})
+            given($cigar)
             {
-                my %bases :shared =
-                (
-                    A => 0,
-                    T => 0,
-                    G => 0,
-                    C => 0,
-                    X => 0,
-                    I => 0,
-                );
-                lock(%master_alignment);
-                $master_alignment{$reference_pointer} = \%bases;                
-            }
-
-            unless($master_alignment{$reference_pointer-1})
-            {
-                 my %bases :shared =
-                (
-                    A => 0,
-                    T => 0,
-                    G => 0,
-                    C => 0,
-                    X => 0,
-                    I => 0,
-                );
-                lock(%master_alignment);
-                $master_alignment{$reference_pointer-1} = \%bases;               
-            }
-
-            # To handle S, or soft clipping values that appear only at the start and end of the cigar string
-            if( $cigar eq "S")
-            {
-                $inserting = 0;
-
-                # Handle a starting softclip, increment the insertion for
-                # The postion one before the start of the cigar alignment
-                if(!$soft_clipping && $first)
+                # To handle S, or soft clipping values that appear only at the start and end of the cigar string
+                when("S")
                 {
-                    $soft_clipping = 1;
-                    lock(%master_alignment);
-                    $master_alignment{$sam->cigar->start_pos}{"I"} += 1;
-                    $first = 0;
+                    $inserting = 0;
+
+                    # Handle a starting softclip, increment the insertion for
+                    # The postion one before the start of the cigar alignment
+                    if(!$soft_clipping && $first)
+                    {
+                        $soft_clipping = 1;
+                        $local_alignment{$sam->cigar->start_pos}{"I"} += 1;
+                        $first = 0;
+                    }
+
+                    # Handle the ending softclip, increment the insertion for
+                    # The postion at the end of the cigar alignment
+                    elsif(!$soft_clipping && !$first)
+                    {
+                        $soft_clipping = 1;
+                        $local_alignment{$sam->cigar->end_pos}{"I"} += 1;
+                    }
                 }
 
-                # Handle the ending softclip, increment the insertion for
-                # The postion at the end of the cigar alignment
-                elsif(!$soft_clipping && !$first)
+                # When a D is popped we have a deletion
+                # Increment the deletion counter at this position in the reference
+                # Incremenet the reference pointer
+                # Do no increment the read pointer becuase this was a deletion (ie not in the read)
+                when("D")
                 {
-                    $soft_clipping = 1;
-                    lock(%master_alignment);
-                    $master_alignment{$sam->cigar->end_pos}{"I"} += 1;
+                    # Accouting
+                    $soft_clipping = 0;
+                    $inserting = 0;
+                    if($first) { $first = 0;}
+
+                    $local_alignment{$reference_pointer}{"X"} += 1;
+                    $reference_pointer++;
                 }
-            }
 
-            # When a D is popped we have a deletion
-            # Increment the deletion counter at this position in the reference
-            # Incremenet the reference pointer
-            # Do no increment the read pointer becuase this was a deletion (ie not in the read)
-            elsif($cigar eq "D")
-            {
-                # Accouting
-                $soft_clipping = 0;
-                $inserting = 0;
-                if($first) { $first = 0;}
-
-                lock(%master_alignment);
-                $master_alignment{$reference_pointer}{"X"} += 1;
-                $reference_pointer++;
-            }
-
-            elsif($cigar eq "M")
-            {
-                # Accouting
-                $soft_clipping = 0;
-                $inserting = 0;
-                if($first) { $first = 0;}
-
-                lock(%master_alignment);
-                $master_alignment{$reference_pointer}{$sam->sequence->base_at($read_pointer)} += 1;
-                $reference_pointer++;
-                $read_pointer++;
-            }
-
-            elsif($cigar eq "I")
-            {
-                # Accouting
-                $soft_clipping = 0;
-                if($first) { $first = 0;}
-
-                if(!$inserting)
+                when("M")
                 {
-                    lock(%master_alignment);
-                    $master_alignment{$reference_pointer-1}{"I"} += 1;
-                    $inserting = 1;
+                    # Accouting
+                    $soft_clipping = 0;
+                    $inserting = 0;
+                    if($first) { $first = 0;}
+
+                    $local_alignment{$reference_pointer}{$sam->sequence->base_at($read_pointer)} += 1;
+                    $reference_pointer++;
+                    $read_pointer++;
                 }
-                $read_pointer++;
+
+                when("I")
+                {
+                    # Accouting
+                    $soft_clipping = 0;
+                    if($first) { $first = 0;}
+
+                    if(!$inserting)
+                    {
+                        $local_alignment{$reference_pointer-1}{"I"} += 1;
+                        $inserting = 1;
+                    }
+                    $read_pointer++;
+                }
             }
         }
+        $results_queue->enqueue(\%local_alignment);
     }
 }
