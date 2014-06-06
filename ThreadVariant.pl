@@ -1,5 +1,4 @@
 #!/usr/bin/perl
-
 ###################
 ## THREAD SET UP ##
 ###################
@@ -11,27 +10,30 @@ use Thread::Queue;
 use lib "/home/kyle/lab/easy-variant/lib/";
 use Sam;
 
+my %master_alignment :shared;
+
 # QUEUES #
 my $work_queue = Thread::Queue->new();
 my @results_queues :shared;
+my @results_threads;
 
-# Determine number of threads to use in pool and create them
-my $max_threads = `nproc`;
+my $keep_working :shared = 1;
+my $keep_results :shared = 1;
 
 # WORKERS #
-my $workers = $max_threads - 2;
 my @worker_threads;
-for(1..5)
+
+for my $index (0..4)
 {
-    push(@worker_threads, threads->create('parse_sam', $result_index));
     push(@results_queues, Thread::Queue->new());
-
+    push(@worker_threads, threads->create('parse_sam', $index));
+    push(@results_threads, threads->create('merge_results', $index));
 }
-
 
 ###################
 ## MAIN SET UP   ##
 ###################
+use Data::Printer;
 use Genome;
 use Getopt::Long;
 use File::Slurp;
@@ -89,13 +91,14 @@ foreach my $sam_line (@sam_lines)
     # Queue the SAM for processing
     $work_queue->enqueue($sam_line);
 }
-
+$keep_working = 0;
 # Signal end of data, wait for threads to finish
-my @results;
 $work_queue->end();
 $_->join() for @worker_threads;
-$results_queue->end();
-my $master_alignment = $result_thread->join();
+print "Work is done \n";
+$keep_results = 0;
+$_->join() for @results_threads;
+p(%master_alignment);
 
 ###################
 # SNP calling Block
@@ -118,7 +121,7 @@ my $passed = 0;
 my $passed_positions;
 
 my $ref_seq = $genome->seq;
-foreach my $key (sort({ $a <=> $b} keys(%$master_alignment)))
+foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 {
     my $wildtype = uc(substr($ref_seq, ($key-1), 1));
     my $denominator = 0;
@@ -126,17 +129,16 @@ foreach my $key (sort({ $a <=> $b} keys(%$master_alignment)))
     my $most = 0;
     my $most_base;
 
-    foreach my $call (keys(% { $$master_alignment{$key} }))
+    foreach my $call (keys(% { $master_alignment{$key} }))
     {
         if($call ne "I")
         {
-            $denominator += $$master_alignment{$key}{$call};
+            $denominator += $master_alignment{$key}{$call};
         }
 
-        $depth += $$master_alignment{$key}{$call};
-        if($$master_alignment{$key}{$call} > $most)
+        if($master_alignment{$key}{$call} > $most)
         {
-            $most = $$master_alignment{$key}{$call};
+            $most = $master_alignment{$key}{$call};
             $most_base = $call;
         }
     }
@@ -155,27 +157,44 @@ my $depth_percent = ($passed/$genome_length)*100;
 say $variants "\n$passed bases had a depth of $min_depth or more, out of the total $genome_length, ($depth_percent%)";
 close $variants;
 
-sub merge_result
+sub merge_results
 {
-    my %master_alignment;
-    while(defined(my $local = $results_queue->dequeue()))
+    my $index = shift;
+    while($keep_results)
     {
-        foreach my $position (keys($local))
+    	next unless defined(my $local = $results_queues[$index]->dequeue_nb());
+        foreach my $position (keys(%{ $local }))
         {
             foreach my $call (keys($$local{$position}))
             {
-                $master_alignment{$position}{$call} += $$local{$position}{$call};
+                lock(%master_alignment);
+		unless(defined($master_alignment{$position}))
+		{
+		   print "Setting $position to new hash \n";
+		   my %bases :shared =
+		   (
+		   	A => 0,
+			T => 0,
+			C => 0,
+			G => 0,
+			X => 0,
+			I => 0,
+		   );	
+		   $master_alignment{$position} = \%bases;
+		}
+		$master_alignment{$position}{$call} += $$local{$position}{$call};
             }
         }
     }
-    return \%master_alignment;
 }
 
 sub parse_sam 
 {
-    while(defined (my $sam_line = $work_queue->dequeue()))
+    my $index = shift;
+    while($keep_working)
     {
-        my %local_alignment;
+        next unless defined(my $sam_line = $work_queue->dequeue_nb());
+	my %local_alignment;
         my $sam = Sam->new(raw_string => $sam_line);
         my $reference_pointer = $sam->cigar->start_pos;
         my $read_pointer = 1;
@@ -258,6 +277,7 @@ sub parse_sam
                 }
             }
         }
-        $results_queue->enqueue(\%local_alignment);
+        $results_queues[$index]->enqueue(\%local_alignment);
     }
+    $results_queues[$index]->end();
 }
