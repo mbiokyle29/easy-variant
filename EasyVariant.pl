@@ -15,8 +15,6 @@
 # Notes|Warnings|Disclaimer
 # 	Using the --start --end flags, with the other range functions may cause unintended behvaior
 #	best to only use one (start/end) or (ignore and repeat)
-# 
-#	Be sure to set use lib to the correct dir for the Moose modules
 #
 #	Range strings must be entered as int-int,int-int !!!
 #	
@@ -24,21 +22,20 @@
 #################################################################################################################
 use warnings;
 use strict;
-use lib "/home/kyle/lab/easy-variant/lib/";
+use FindBin;
+use lib "$FindBin::Bin/lib";
 use Genome;
 use Sam;
 use Getopt::Long;
 use File::Slurp;
 use feature qw(say switch);
+use Data::Printer;
 
 # Predefine args for GetOpts
 my ($start_pos, $end_pos, $sam_file, $reference);
 my ($min_depth, $indel_ratio, $output);
 my ($repeat_ranges, $ignore_ranges, $all_bases);
-
-### PRINT SHIM
-my $watch_ranges;
-###
+my $vcf_flag;
 
 GetOptions (
 	#Required arguments
@@ -53,7 +50,7 @@ GetOptions (
 	"repeat-ranges=s" => \$repeat_ranges,
 	"ignore-ranges=s" => \$ignore_ranges,
 	"all-bases=i" => \$all_bases,
-	"watch-ranges=s" => \$watch_ranges,
+	"vcf=i" => \$vcf_flag,
 );
 
 # Check for required args
@@ -65,6 +62,7 @@ unless($sam_file && $reference)
 
 # Genome wide alignment results (This is where the magic happens!)
 my %master_alignment;
+my @variants;
 
 # Hashes for optional ignore and repeat regions key = start, val = end
 # If the flages were given at command line, parse the strings into hashes
@@ -77,19 +75,6 @@ if($repeat_ranges)
 {
 	$repeat_hash = parse_ranges($repeat_ranges);
 }
-
-### PRINT SHIM##########
-my $watch_hash;
-my $watch_file;
-if($watch_ranges)
-{
-	my $watch_name;
-	if($output) {$watch_name = $output; }
-	else { $watch_name = $sam_file.".watch"; }
-	$watch_hash = parse_ranges($watch_ranges);
-	open $watch_file, ">", $watch_name;
-}
-##############
 
 # 'Build' the genome, hopefully it's already in mysql
 # Otherwise this might take awhile
@@ -146,20 +131,6 @@ foreach my $sam_line (@sam_lines)
 	my $inserting = 0;
 	my $start =  $sam->cigar->start_pos;
 	my $end = $sam->cigar->end_pos;
-
-	### PRINT SHIM
-	if($watch_hash)
-	{
-		for my $pos ($start..$end)
-		{
-			if(in_range($pos, $watch_hash))
-			{
-				say $watch_file $sam->raw_string;
-				last;
-			}
-		}
-	}
-	###
 
 	# Iterate through each 'Letter' of the cigar stack
 	foreach my $cigar (@cigar_stack)
@@ -357,7 +328,22 @@ foreach my $key (sort({ $a <=> $b} keys(%master_alignment)))
 		}
 		say $all_base "";
 	}
+
+	# Conditionally create the vcf entry and push to the array
+	if($vcf_flag)
+	{
+		my $chrom = $genome->name;
+		my $pos = $key;
+		my $ref = $wildtype;
+		my $alt = $most_base;
+		my $missing = ".";
+		push(@variants, "$chrom\t$pos\t$ref\t$alt\t$missing\t$missing\t$missing");
+	}
 }
+
+# Create vcf file
+if($vcf_flag) { output_vcf(\@variants); }
+
 
 ###########################################
 # Calculate the Denominators for coverage #
@@ -397,7 +383,6 @@ if($repeat_hash)
 # Close all file handles
 close $variants;
 if($all_bases) { close $all_base; }
-if($watch_file) { close $watch_file; }
 
 ###############
 # SUBROUTINES #
@@ -479,4 +464,22 @@ sub in_range
 		}
 	}
 	return $in_ranges;
+}
+
+#################################################
+# Generate a vcf file format of the variants    #
+#################################################
+sub output_vcf
+{
+	my ($variants) = @_;
+	open my $vcf, ">", "output.vcf";
+	my $header_line = "##fileformat=VCFv4.1\n";
+	$header_line .= "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO";
+	say $vcf $header_line;
+	foreach my $variant (@$variants)
+	{
+		my ($chrom, $pos, $id, $ref, $alt, $qual, $filter, $info) = split("\t", $variant);
+		say $vcf "$chrom\t$pos\t$id\t$ref\t$alt\t$qual\t$filter";
+	}
+	close $vcf;
 }
