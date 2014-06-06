@@ -1,8 +1,8 @@
 package Genome;
 use Moose;
+use File::Basename;
 use namespace::autoclean;
 use DBI;
-use Data::Dumper;
 use File::Slurp;
 
 our $dbh = DBI->connect('dbi:mysql:genomes','genomes','ebvHACK958$');
@@ -43,8 +43,7 @@ has 'seq' => (
 sub _build_name
 {
 	my $self = shift;
-	$self->fasta =~ m/(.*)\.fa.*$/;
-	my $name = $1;
+	my $name = fileparse($self->fasta, qr|\.fa(sta)?|);
 	$name =~ s/-/_/g;
 	return $name;
 }
@@ -72,7 +71,7 @@ sub _build_seq
 	my $result = $sth->fetchall_arrayref;
 	foreach my $base (@$result)
 	{
-		$ref_seq.=$$base[0];
+		$ref_seq .= $$base[0];
 	}
 	return $ref_seq;
 }
