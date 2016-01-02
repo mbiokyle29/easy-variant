@@ -41,6 +41,7 @@ GetOptions (
 	#Required arguments
 	"sam=s" => \$sam_file,
 	"reference=s" => \$reference,
+	
 	# Optional Arguemts
 	"start=i" => \$start_pos,
 	"end=i" => \$end_pos,

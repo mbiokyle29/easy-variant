@@ -12,13 +12,12 @@ The optional arguments allow for a decent amount of fine tuning, including:
  -designating a set of ranges as repeat regions (For coverage statistics)
  -getting not only the variant calls, but the ATCGXI tally for each call
 
-Notes|Warnings|Disclaimer
+## Notes|Warnings|Disclaimers ##
 
- 	Using the --start --end flags, with the other range functions may cause unintended behvaior
-	best to only use one (start/end) or (ignore and repeat)
+ - Using the --start --end flags, with the other range functions may cause unintended behvaior best to only use one (start/end) or (ignore and repeat)
 
-	Be sure to set use lib to the correct dir for the Moose modules
+ - Be sure to set use lib to the correct dir for the Moose modules
 
-	Range strings must be entered as int-int,int-int !!!
+ - Range strings must be entered as int-int,int-int !!!
 	
-	The Genome package is backed by mysql, and might take some configuration
+ - The Genome package is backed by mysql, and might take some configuration
